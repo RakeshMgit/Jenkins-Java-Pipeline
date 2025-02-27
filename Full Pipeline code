@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        JAVA_HOME = "/usr/lib/jvm/java-11-openjdk"
+        MAVEN_HOME = "/usr/share/maven"
+        PATH = "${JAVA_HOME}/bin:${MAVEN_HOME}/bin:${PATH}"
+        AWS_REGION = "us-east-1"
+        ECR_REPO = "your-ecr-repo"
+        EKS_CLUSTER = "your-eks-cluster"
+        GIT_CREDENTIALS_ID = "github-token" // Your Jenkins stored credentials
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/your-repo/java-app.git',
+                            credentialsId: GIT_CREDENTIALS_ID
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Build Java App') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def ecrUri = sh(script: "aws ecr describe-repositories --repository-names ${ECR_REPO} --query 'repositories[0].repositoryUri' --output text", returnStdout: true).trim()
+
+                    sh """
+                        docker build -t ${ecrUri}:latest .
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}
+                        docker push ${ecrUri}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                sh """
+                    kubectl apply -f deployment.yaml
+                    kubectl apply -f service.yaml
+                    sleep 60
+                """
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh """
+                    kubectl get pods
+                    kubectl get services
+                """
+            }
+        }
+    }
+}
+ 
